@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hledger-core"
+version = "0.1.0"
+description = "Shared domain models, types, and utilities for the hledger ecosystem"
+requires-python = ">=3.10"
+dependencies = [
+    "typeguard>=2.13.3",
+    "pyyaml>=6.0",
+    "pandas>=1.5",
+    "numpy>=1.23",
+    "Pillow>=9.0",
+    "python-dateutil>=2.8",
+    "chardet>=5.0",
+    "iso8601>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 80
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+ignore_missing_imports = true

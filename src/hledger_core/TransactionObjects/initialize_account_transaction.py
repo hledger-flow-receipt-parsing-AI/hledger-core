@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING, Union
+
+if TYPE_CHECKING:
+    from hledger_config.config.AccountConfig import AccountConfig
+    from hledger_config.config.Config import Config
+
+from hledger_core.csv_parsing.helper import read_date
+from hledger_core.Currency import Currency
+from hledger_core.generics.GenericTransactionWithCsv import (
+    GenericCsvTransaction,
+)
+from hledger_core.TransactionObjects.AccountTransaction import (
+    Account,
+    AccountTransaction,
+)
+from hledger_core.TransactionObjects.Posting import TransactionCode
+
+
+def initialize_account_transaction(
+    *,
+    config: Config,
+    transaction: dict,
+    account: Account,
+    currency: Currency,
+    the_date: datetime,
+    recursion_depth: int,
+) -> Union[AccountTransaction, GenericCsvTransaction]:
+    """
+    Initialize an AccountTransaction with an optional TriodosTransaction.
+
+    Args:
+        transaction: Dictionary containing transaction data
+        account: Account object
+        currency: Currency enum
+
+    Returns:
+        AccountTransaction object
+
+    Raises:
+        ValueError: If multiple transaction types are supported or initialization fails
+    """
+    supported_types = ["TriodosTransaction"]
+
+    if len(supported_types) > 1:
+        raise ValueError(
+            "Multiple transaction types are not supported. Only one type should"
+            " be specified."
+        )
+
+    from hledger_config.config.helper import get_account_config
+
+    account_config: AccountConfig = get_account_config(
+        config=config, account=account
+    )
+
+    if account_config.has_input_csv():
+
+        if "currency" in transaction.keys():
+            currency_str = transaction.pop("currency")
+            payment_currency = Currency(currency_str) if isinstance(currency_str, str) else currency_str
+            if payment_currency != account.base_currency:
+                transaction["payment_currency"] = payment_currency
+
+        # Extract the date of the transaction — safely
+        if "the_date" in transaction:
+            pass  # already good
+        elif (
+            "original_transaction" in transaction
+            and transaction["original_transaction"] is not None
+            and "the_date" in transaction["original_transaction"]
+        ):
+            transaction["the_date"] = transaction["original_transaction"][
+                "the_date"
+            ]
+
+        else:
+            transaction["the_date"] = the_date
+        if isinstance(transaction["the_date"], str):
+            transaction["the_date"] = read_date(
+                the_date_str=transaction["the_date"]
+            )
+
+        if "original_transaction" in transaction.keys():
+            if recursion_depth < 1:
+                transaction["original_transaction"] = (
+                    initialize_account_transaction(
+                        config=config,
+                        transaction=transaction,
+                        account=account,
+                        currency=currency,
+                        the_date=the_date,
+                        recursion_depth=1,
+                    )
+                )
+            else:
+                transaction.pop("original_transaction")
+
+        # TODO: assert account is equal to that of AccountConfig.
+        if not isinstance(transaction["account"], Account):
+            transaction["account"]["base_currency"] = Currency(
+                transaction["account"]["base_currency"]
+            )
+            transaction["account"] = Account(
+                **transaction["account"],
+            )
+        if (
+            "transaction_code" in transaction.keys()
+            and transaction["transaction_code"]
+            and not isinstance(transaction["transaction_code"], TransactionCode)
+        ):
+
+            transaction["transaction_code"] = TransactionCode(
+                transaction["transaction_code"]
+            )
+        transaction.pop("parent_receipt_category", None)
+        return GenericCsvTransaction(**transaction)
+    else:
+
+        transaction["the_date"] = the_date
+        transaction["account"] = account
+        if "currency" in transaction.keys():
+            currency_str = transaction.pop("currency")
+            payment_currency = Currency(currency_str) if isinstance(currency_str, str) else currency_str
+            if payment_currency != account.base_currency:
+                transaction["payment_currency"] = payment_currency
+
+        if "original_transaction" in transaction.keys():
+            if recursion_depth < 1:
+                transaction["original_transaction"] = (
+                    initialize_account_transaction(
+                        config=config,
+                        transaction=transaction,
+                        account=account,
+                        currency=currency,
+                        the_date=the_date,
+                        recursion_depth=1,
+                    )
+                )
+            else:
+                transaction.pop("original_transaction")
+        account_txn: AccountTransaction = AccountTransaction(**transaction)
+
+        return account_txn
