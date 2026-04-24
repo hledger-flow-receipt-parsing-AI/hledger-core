@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pprint import pprint
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import iso8601
 from typeguard import typechecked
@@ -89,7 +89,7 @@ def _convert_withdrawal_metadata(
 @dataclass
 class Receipt:
     config: Config
-    raw_img_filepath: str
+    raw_img_filepaths: Union[str, List[str]]
     the_date: datetime
     shop_identifier: ShopId
     net_bought_items: ExchangedItem = field(default_factory=list)
@@ -103,6 +103,9 @@ class Receipt:
     withdrawal_metadata: Optional[WithdrawalMetadata] = None
 
     def __post_init__(self):
+        # Normalize single image path to list for backward compat.
+        if isinstance(self.raw_img_filepaths, str):
+            self.raw_img_filepaths = [self.raw_img_filepaths]
 
         if isinstance(self.the_date, str):
             try:
@@ -145,6 +148,11 @@ class Receipt:
                 wm_dict=self.withdrawal_metadata,
                 the_date=self.the_date,
             )
+
+    @property
+    def raw_img_filepath(self) -> str:
+        """Backward compat -- returns the primary (first) image path."""
+        return self.raw_img_filepaths[0] if self.raw_img_filepaths else ""
 
     @typechecked
     def _get_transacted_items(
