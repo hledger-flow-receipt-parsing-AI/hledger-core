@@ -1,20 +1,20 @@
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 import pandas as pd
 import requests
 from typeguard import typechecked
 
-if TYPE_CHECKING:
-    from hledger_config.config.load_config import Config
-
 from hledger_core.Currency import Currency
+
+log = logging.getLogger(__name__)
 
 
 @typechecked
-def fetch_exchange_rates(*, base_currency: str = "EUR"):
+def fetch_exchange_rates(*, base_currency: str = "EUR", config=None):
     rates = {}
     sources = {}
     now = datetime.now().isoformat()
@@ -104,21 +104,26 @@ def fetch_exchange_rates(*, base_currency: str = "EUR"):
         }
     )
 
-    from hledger_config.config.load_config import load_config
-
-    config: Config = load_config(
-        config_path="/home/a/finance/config.yaml",
-        pre_processed_output_dir="TODO: replace this with a decent solution",
-    )
-    csv_path = f"{config.get_working_subdir_path(assert_exists=True)}/exchange_rates.csv"
-
-    import os
-    write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
-    df_rates.to_csv(
-        csv_path,
-        mode="a",
-        header=write_header,
-        index=False,
-    )
+    # Best-effort: persist fetched rates to a history CSV when a config is
+    # provided to locate the working dir.  Skipped otherwise (e.g. tests/CI)
+    # so rate fetching never depends on a hard-coded config path.
+    if config is not None:
+        try:
+            csv_path = (
+                f"{config.get_working_subdir_path(assert_exists=True)}"
+                "/exchange_rates.csv"
+            )
+            write_header = (
+                not os.path.exists(csv_path)
+                or os.path.getsize(csv_path) == 0
+            )
+            df_rates.to_csv(
+                csv_path, mode="a", header=write_header, index=False
+            )
+        except Exception:
+            log.warning(
+                "Could not persist exchange-rate history; continuing.",
+                exc_info=True,
+            )
 
     return rates, now
