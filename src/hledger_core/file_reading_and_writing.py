@@ -1,9 +1,12 @@
 """Handles file reading and writing."""
 
+import codecs
 import hashlib
 import json
 import os
-from typing import Any, Dict, List, Union
+import shutil
+import tempfile
+from typing import Any, Dict, List, Optional, Union
 
 import chardet
 from typeguard import typechecked
@@ -77,39 +80,124 @@ def assert_file_exists(*, filepath: str) -> None:
         raise FileNotFoundError(f"File '{filepath}' does not exist.")
 
 
+# Below this confidence the detector's guess is close to random: for a short
+# Windows-1252 text it names Mac Roman or a Hebrew DOS code page at 2-5%.
+_MIN_GUESS_CONFIDENCE = 0.5
+# What a Western European export that is not UTF-8 almost always is.  latin-1
+# maps every byte to a character, so it always fits.
+_FALLBACK_ENCODINGS = ("cp1252", "latin-1")
+
+
+@typechecked
+def _decodes(*, raw_data: bytes, encoding: str) -> bool:
+    try:
+        raw_data.decode(encoding)
+    except (UnicodeDecodeError, LookupError):
+        return False
+    return True
+
+
 @typechecked
 def detect_file_encoding(*, filepath: str) -> str:
+    """An encoding that decodes the whole file without errors.
+
+    Whether the bytes are valid UTF-8 is checked first: that is far more
+    reliable than the detector, which calls a large, mostly-ASCII UTF-8 file
+    "ascii".  Reading with such a guess and ``errors="replace"`` silently
+    turns the non-ASCII bytes into replacement characters.  The detector is
+    only asked for files that are not UTF-8, and only believed when it is
+    confident and its answer fits the file.
+    """
     with open(filepath, "rb") as file:
         raw_data = file.read()
-    result = chardet.detect(raw_data)
-    detected_encoding: str = str(result["encoding"])
-    if detected_encoding is None or detected_encoding == "None":
-        print(
-            f"WARNING: Did not detect encoding for:\n{filepath}\n assumed utf-8"
-        )
+
+    # UTF-32 first: its little-endian mark starts with the UTF-16 one.
+    if raw_data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        return "utf-32"
+    if raw_data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    if _decodes(raw_data=raw_data, encoding="utf-8"):
+        if raw_data.startswith(codecs.BOM_UTF8):
+            return "utf-8-sig"
         return "utf-8"
-    return detected_encoding
+
+    result = chardet.detect(raw_data)
+    guess: Optional[str] = result.get("encoding")
+    confidence: float = float(result.get("confidence") or 0.0)
+    if guess is None or str(guess) == "None":
+        print(
+            f"WARNING: Did not detect encoding for:\n{filepath}\n assumed"
+            f" {_FALLBACK_ENCODINGS[0]}"
+        )
+    elif confidence >= _MIN_GUESS_CONFIDENCE and _decodes(
+        raw_data=raw_data, encoding=str(guess)
+    ):
+        return str(guess)
+    for encoding in _FALLBACK_ENCODINGS:
+        if _decodes(raw_data=raw_data, encoding=encoding):
+            return encoding
+    return "latin-1"
 
 
 @typechecked
 def convert_input_csv_encoding(
     *, input_csv_filepath: str, output_encoding: str
 ) -> None:
+    """Make sure the file is stored in *output_encoding*, without changing
+    its content.
+
+    A file that already is in *output_encoding* is not touched.  This used
+    to read the file with a guessed encoding, replace what did not fit by
+    replacement characters and write the result back on every run; for a
+    mostly-ASCII UTF-8 file each non-ASCII byte tripled per run, until the
+    CSV parser refused the file ("field larger than field limit").
+
+    Raises ValueError, leaving the file as it was, when the content cannot
+    be stored in *output_encoding*.
+    """
     if input_csv_filepath is None:
         raise ValueError(f"Must have valid filepath, got:{input_csv_filepath}")
-    detected_encoding = detect_file_encoding(filepath=input_csv_filepath)
-    # Read the file with the detected encoding and save it as UTF-8
-    with open(
-        input_csv_filepath,
-        encoding=detected_encoding,
-        errors="replace",
-    ) as infile:
-        content = infile.read()
+    with open(input_csv_filepath, "rb") as infile:
+        raw_data = infile.read()
 
-    with open(
-        input_csv_filepath, mode="w", encoding=output_encoding
-    ) as outfile:
-        outfile.write(content)
+    to_utf8 = codecs.lookup(output_encoding).name == "utf-8"
+    if to_utf8 and raw_data.startswith(codecs.BOM_UTF8):
+        # Same content without the byte order mark.
+        converted = raw_data[len(codecs.BOM_UTF8) :]
+    else:
+        try:
+            raw_data.decode(output_encoding)
+            return  # Already stored in the wanted encoding.
+        except UnicodeDecodeError:
+            pass
+        source_encoding = detect_file_encoding(filepath=input_csv_filepath)
+        # Strict decoding: detect_file_encoding() returned an encoding that
+        # fits every byte, so nothing is replaced or dropped.
+        content = raw_data.decode(source_encoding)
+        try:
+            converted = content.encode(output_encoding)
+        except UnicodeEncodeError as error:
+            raise ValueError(
+                f"Cannot store {input_csv_filepath} as {output_encoding}:"
+                f" {error}"
+            ) from error
+
+    # Replace the file in one step, so a failure cannot leave half a file.
+    target = os.path.realpath(input_csv_filepath)
+    descriptor, temp_path = tempfile.mkstemp(
+        dir=os.path.dirname(target), prefix=".encoding-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as outfile:
+            outfile.write(converted)
+            outfile.flush()
+            os.fsync(outfile.fileno())
+        shutil.copymode(target, temp_path)
+        os.replace(temp_path, target)
+    except BaseException:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
 
 
 @typechecked
