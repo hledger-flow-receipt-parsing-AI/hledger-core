@@ -52,6 +52,18 @@ class Currency(Enum):
         return [cls.SILVER, cls.GOLD, cls.CASH]
 
 
+def base_value_of_one_unit(*, source: str, rate: float) -> float:
+    """Turn a stored quote into the base-currency value of one unit.
+
+    Frankfurter quotes fiat as units per base unit (base EUR: USD 1.16 means
+    1 EUR = 1.16 USD); CoinGecko quotes crypto as base per unit (BTC 98801
+    means 1 BTC = 98801 EUR).  Callers multiply amounts by the result.
+    """
+    if "frankfurter" in str(source):
+        return 1.0 / rate
+    return rate
+
+
 # Function to load latest rates from CSV
 def load_latest_rates(base_currency="EUR"):
     csv_path = "exchange_rates.csv"
@@ -66,7 +78,12 @@ def load_latest_rates(base_currency="EUR"):
     latest = df.sort_values("datetime", ascending=False).drop_duplicates(
         "currency"
     )
-    rates = dict(zip(latest["currency"], latest["rate_to_base"]))
+    rates = {
+        currency: base_value_of_one_unit(source=source, rate=float(rate))
+        for currency, source, rate in zip(
+            latest["currency"], latest["source"], latest["rate_to_base"]
+        )
+    }
     # Ensure base is 1
     rates[base_currency] = 1.0
     return rates

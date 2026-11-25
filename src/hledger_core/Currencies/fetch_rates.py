@@ -8,7 +8,7 @@ import pandas as pd
 import requests
 from typeguard import typechecked
 
-from hledger_core.Currency import Currency
+from hledger_core.Currency import Currency, base_value_of_one_unit
 
 log = logging.getLogger(__name__)
 
@@ -114,8 +114,7 @@ def fetch_exchange_rates(*, base_currency: str = "EUR", config=None):
                 "/exchange_rates.csv"
             )
             write_header = (
-                not os.path.exists(csv_path)
-                or os.path.getsize(csv_path) == 0
+                not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
             )
             df_rates.to_csv(
                 csv_path, mode="a", header=write_header, index=False
@@ -126,4 +125,9 @@ def fetch_exchange_rates(*, base_currency: str = "EUR", config=None):
                 exc_info=True,
             )
 
-    return rates, now
+    # The CSV keeps each API's raw quote next to its source; callers get
+    # the base-currency value of one unit for every currency.
+    return {
+        currency: base_value_of_one_unit(source=sources[currency], rate=rate)
+        for currency, rate in rates.items()
+    }, now
