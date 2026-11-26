@@ -19,6 +19,24 @@ from hledger_core.generics.Transaction import Transaction
 
 logger = logging.getLogger(__name__)
 
+# The columns after the classifications, in the order the hledger rules
+# name them (hledger_rules: fields).  Every row has all of them, empty when
+# they do not apply: hledger reads the columns by position, so a column
+# that is only there in some rows would shift the ones after it.
+TAGS_COLUMN = "tags"
+WITHDRAWAL_COLUMNS = (
+    "withdrawal_source_account",
+    "withdrawal_source_amount",
+    "withdrawal_source_currency",
+    "withdrawal_atm_fee",
+    "withdrawal_dest_amount",
+    "withdrawal_exchange_rate",
+    "withdrawal_bank_fx_fee",
+    "withdrawal_dest_account",
+    "withdrawal_change_returned",
+    "withdrawal_dest_currency",
+)
+
 
 @typechecked
 @dataclass(frozen=True, unsafe_hash=True)
@@ -27,6 +45,9 @@ class ProcessedTransaction:
     ai_classifications: Dict[str, str]
     logic_classifications: Dict[str, str]
     parent_receipt: Optional["Receipt"] = None
+    # The journal comment of the transaction: the tags of its receipt
+    # ("workbench:, traceable:yes", see hledger_core.tagging).
+    tags_comment: str = ""
 
     # ai_classifications: Dict[str, str] = field(default_factory=dict)
     # logic_classifications: Dict[str, str] = field(default_factory=dict)
@@ -50,8 +71,6 @@ class ProcessedTransaction:
 
         # Inject enrichment data into the dictionary
         if self.parent_receipt:
-            data["receipt_link"] = self.parent_receipt.raw_img_filepath
-
             # Inject withdrawal metadata for multi-posting journal entries.
             wm = self.parent_receipt.withdrawal_metadata
             if wm is not None:
@@ -152,6 +171,20 @@ class ProcessedTransaction:
         # data["ai_classifications"] = self.ai_classifications
         # data["logic_classifications"] = self.logic_classifications
 
-        data.update(self.logic_classifications)
-        data.update(self.ai_classifications)
-        return data
+        # The columns in the order of the rules file: the transaction's own
+        # columns, the classifications, the tags, the withdrawal columns
+        # (empty when this is no withdrawal), and the receipt link last (it
+        # is no rules field; hledger ignores columns after the named ones).
+        ordered: Dict = {
+            key: value
+            for key, value in data.items()
+            if key not in WITHDRAWAL_COLUMNS
+        }
+        ordered.update(self.logic_classifications)
+        ordered.update(self.ai_classifications)
+        ordered[TAGS_COLUMN] = self.tags_comment
+        for column in WITHDRAWAL_COLUMNS:
+            ordered[column] = data.get(column, "")
+        if self.parent_receipt:
+            ordered["receipt_link"] = self.parent_receipt.raw_img_filepath
+        return ordered

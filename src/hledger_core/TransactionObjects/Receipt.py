@@ -101,6 +101,10 @@ class Receipt:
     transaction_hash: Optional[str] = None
     receipt_category: Optional[str] = None
     withdrawal_metadata: Optional[WithdrawalMetadata] = None
+    # Events and projects the receipt belongs to ("workbench",
+    # "seaside-trip"), plus "traceable"/"untraceable" when the user
+    # said so; see hledger_core.tagging.
+    tags: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         # Normalize single image path to list for backward compat.
