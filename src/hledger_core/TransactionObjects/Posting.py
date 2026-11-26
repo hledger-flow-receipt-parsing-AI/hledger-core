@@ -30,11 +30,13 @@ class TransactionCode(Enum):
                 "Debit": cls.DEBIT,
                 "DEBIT": cls.DEBIT,
                 "Debet": cls.DEBIT,
+                "af": cls.DEBIT,  # Dutch bank exports: "Af" = out of account
             }
             credit_variations = {
                 "credit": cls.CREDIT,
                 "Credit": cls.CREDIT,
                 "CREDIT": cls.CREDIT,
+                "bij": cls.CREDIT,  # "Bij" = into the account
             }
 
             code = transaction_code.strip()
